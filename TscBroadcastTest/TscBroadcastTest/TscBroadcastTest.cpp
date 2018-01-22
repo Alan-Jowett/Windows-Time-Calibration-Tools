@@ -41,6 +41,23 @@ void ComputeStats(std::vector<long long> Samples, long long & Mean, long long & 
     Median = Samples[Samples.size() / 2];
 }
 
+std::pair<size_t, size_t> ParseCpuGroup(const char * str)
+{
+    size_t cpuId = 0;
+    size_t groupId = 0;
+    const char * sep = strchr(str, ':');
+    if (sep != nullptr)
+    {
+        groupId = atoi(str);
+        cpuId = atoi(sep + 1);
+    }
+    else
+    {
+        cpuId = atoi(str);
+    }
+    return { groupId, cpuId };
+}
+
 int main(int argc, char ** argv)
 {
     if (argc != 4)
@@ -49,8 +66,10 @@ int main(int argc, char ** argv)
         printf("Example: %s 0 1 1000000\n", argv[0]);
         exit(-1);
     }
-    size_t serverCpuId = atoi(argv[1]);
-    size_t clientCpuId = atoi(argv[2]);
+    
+
+    std::pair<size_t, size_t> serverCpu = ParseCpuGroup(argv[1]);
+    std::pair<size_t, size_t> clientCpu = ParseCpuGroup(argv[2]);
     size_t samples = atoi(argv[3]);
     std::vector<unsigned long long> tsClient(samples);
     std::vector<unsigned long long> tsServer(samples);
@@ -61,12 +80,19 @@ int main(int argc, char ** argv)
     {
         clientOwns.store(false);
         // Client and server are arbitrary
-        auto client = std::thread([&tsClient, &clientOwns, samples, clientCpuId]() {
-            SetThreadAffinity(clientCpuId);
+        auto client = std::thread([&tsClient, &clientOwns, samples, clientCpu]() {
+            if (!SetThreadAffinity(clientCpu.first, clientCpu.second))
+            {
+                printf("Failed to set CPU affinity");
+                exit(-1);
+            }
             CollectSamples(clientOwns, true, tsClient);
         });
-        auto server = std::thread([&tsServer, &clientOwns, samples, serverCpuId]() {
-            SetThreadAffinity(serverCpuId);
+        auto server = std::thread([&tsServer, &clientOwns, samples, serverCpu]() {
+            if (!SetThreadAffinity(serverCpu.first, serverCpu.second)) {
+                printf("Failed to set CPU affinity");
+                exit(-1);
+            }
             CollectSamples(clientOwns, false, tsServer);
         });
         client.join();

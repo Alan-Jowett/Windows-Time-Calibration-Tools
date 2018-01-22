@@ -14,6 +14,17 @@ inline bool SetThreadAffinity(size_t CpuId)
     }
     return true;
 }
+
+inline bool SetThreadAffinity(size_t Group, size_t CpuId)
+{
+    GROUP_AFFINITY affinity = { 1ull << CpuId, Group };
+    if (!SetThreadGroupAffinity(GetCurrentThread(), &affinity, NULL))
+    {
+        return false;
+    }
+    return true;
+}
+
 #else
 
 #define CACHE_ALIGN(x) \
