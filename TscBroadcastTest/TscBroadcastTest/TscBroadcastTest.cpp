@@ -7,18 +7,22 @@
 #include <vector>
 #include <algorithm>
 
-void CollectSamples(std::atomic<bool> & Signal, bool Client, std::vector<unsigned long long> & Samples)
+volatile bool stop = false;
+
+void CollectSamples(std::atomic<bool> & SignalLocal, std::atomic<bool> & SignalRemote, bool Client, std::vector<unsigned long long> & Samples)
 {
     unsigned int i;
     for (size_t index = 0; index < Samples.size(); index++)
     {
-        while (Signal.load() != Client)
+        while (!stop && SignalLocal.load() != Client)
         {
         }
         unsigned long long ts = __rdtscp(&i);
-        Signal.store(!Client);
+        SignalLocal.store(!Client);
+        SignalRemote.store(!Client);
         Samples[index] = ts;
     }
+    stop = true;
 }
 
 void ComputeStats(std::vector<long long> Samples, long long & Mean, long long & Median, long long & StdDev)
@@ -41,21 +45,18 @@ void ComputeStats(std::vector<long long> Samples, long long & Mean, long long & 
     Median = Samples[Samples.size() / 2];
 }
 
-std::pair<size_t, size_t> ParseCpuGroup(const char * str)
+void * AllocPageForProc(size_t CpuId)
 {
-    size_t cpuId = 0;
-    size_t groupId = 0;
-    const char * sep = strchr(str, ':');
-    if (sep != nullptr)
+    size_t CpuGroup = CpuId / (sizeof(size_t) * 8);
+    size_t CpuNum = CpuId % (sizeof(size_t) * 8);
+
+    PROCESSOR_NUMBER pn = { CpuGroup, CpuNum };
+    USHORT numaNode = 0;
+    if (!GetNumaProcessorNodeEx(&pn, &numaNode))
     {
-        groupId = atoi(str);
-        cpuId = atoi(sep + 1);
+        return nullptr;
     }
-    else
-    {
-        cpuId = atoi(str);
-    }
-    return { groupId, cpuId };
+    return VirtualAllocExNuma(GetCurrentProcess(), nullptr, 4096, MEM_COMMIT, PAGE_READWRITE, numaNode);
 }
 
 int main(int argc, char ** argv)
@@ -66,34 +67,43 @@ int main(int argc, char ** argv)
         printf("Example: %s 0 1 1000000\n", argv[0]);
         exit(-1);
     }
-    
 
-    std::pair<size_t, size_t> serverCpu = ParseCpuGroup(argv[1]);
-    std::pair<size_t, size_t> clientCpu = ParseCpuGroup(argv[2]);
+    size_t serverCpu = atoi(argv[1]);
+    size_t clientCpu = atoi(argv[2]);
     size_t samples = atoi(argv[3]);
-    std::vector<unsigned long long> tsClient(samples);
-    std::vector<unsigned long long> tsServer(samples);
-    std::atomic<bool> clientOwns;
+    std::vector<unsigned long long> tsClient;
+    std::vector<unsigned long long> tsServer;
+    void * clientPage = AllocPageForProc(clientCpu);
+    void * serverPage = AllocPageForProc(serverCpu);
+
+    std::atomic<bool> * signalClient = new (clientPage) std::atomic<bool>(false);
+    std::atomic<bool> * signalServer = new (serverPage) std::atomic<bool>(false);
 
     printf("O-Mean\tO-Med\tO-STDEV\tR-Mean\tR-Med\tR-STDEV\n");
     for (size_t i = 0; i < 10; i++)
     {
+        std::atomic<bool> & clientOwns = *signalClient;
+        std::atomic<bool> & serverOwns = *signalServer;
         clientOwns.store(false);
+        serverOwns.store(false);
+        stop = false;
         // Client and server are arbitrary
-        auto client = std::thread([&tsClient, &clientOwns, samples, clientCpu]() {
-            if (!SetThreadAffinity(clientCpu.first, clientCpu.second))
+        auto client = std::thread([&tsClient, &clientOwns, &serverOwns, samples, clientCpu]() {
+            if (!SetThreadAffinity(clientCpu))
             {
                 printf("Failed to set CPU affinity");
                 exit(-1);
             }
-            CollectSamples(clientOwns, true, tsClient);
+            tsClient.resize(samples);
+            CollectSamples(clientOwns, serverOwns, true, tsClient);
         });
-        auto server = std::thread([&tsServer, &clientOwns, samples, serverCpu]() {
-            if (!SetThreadAffinity(serverCpu.first, serverCpu.second)) {
+        auto server = std::thread([&tsServer, &clientOwns, &serverOwns, samples, serverCpu]() {
+            if (!SetThreadAffinity(serverCpu)) {
                 printf("Failed to set CPU affinity");
                 exit(-1);
             }
-            CollectSamples(clientOwns, false, tsServer);
+            tsServer.resize(samples);
+            CollectSamples(serverOwns, clientOwns, false, tsServer);
         });
         client.join();
         server.join();

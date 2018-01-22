@@ -7,17 +7,9 @@ __declspec(align(64)) x
 
 inline bool SetThreadAffinity(size_t CpuId)
 {
-    DWORD_PTR affinityMask = 1ull << CpuId;
-    if (!SetThreadAffinityMask(GetCurrentThread(), affinityMask))
-    {
-        return false;
-    }
-    return true;
-}
-
-inline bool SetThreadAffinity(size_t Group, size_t CpuId)
-{
-    GROUP_AFFINITY affinity = { 1ull << CpuId, Group };
+    size_t CpuGroup = CpuId / (sizeof(size_t) * 8);
+    size_t CpuNum = CpuId % (sizeof(size_t) * 8);
+    GROUP_AFFINITY affinity = { 1ull << CpuNum, CpuGroup };
     if (!SetThreadGroupAffinity(GetCurrentThread(), &affinity, NULL))
     {
         return false;
