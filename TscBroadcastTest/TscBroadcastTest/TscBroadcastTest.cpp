@@ -18,9 +18,9 @@ void CollectSamples(std::atomic<bool> & SignalLocal, std::atomic<bool> & SignalR
         {
         }
         unsigned long long ts = __rdtscp(&i);
-        Samples[index] = ts;
         SignalLocal.store(!Client);
         SignalRemote.store(!Client);
+        Samples[index] = ts;
     }
     stop = true;
 }
